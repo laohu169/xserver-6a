@@ -332,18 +332,17 @@ class XServerAutoLogin:
                 print("⌨️ 使用回车键提交...")
                 await self.page.press(password_selector, "Enter")
 
-            # 等待 URL 跳离登录页，兼容 AJAX / 302 各种跳转方式
+            # 等待跳离登录页和 loginauth 中间验证页，兼容各种跳转方式
             print("⏳ 等待登录跳转...")
             try:
                 await self.page.wait_for_url(
-                    lambda url: "login" not in url,
+                    lambda url: "login" not in url and "loginauth" not in url,
                     timeout=60000
                 )
                 print(f"✅ 页面已跳转: {self.page.url}")
             except Exception:
-                # 降级：直接等待后交由 handle_login_result 判断
-                print("⚠️ wait_for_url 超时，等待10秒后继续由结果判断模块处理...")
-                await asyncio.sleep(10)
+                print("⚠️ wait_for_url 超时，继续向下执行...")
+                await asyncio.sleep(5)
 
             return True
         except Exception as e:
@@ -357,7 +356,16 @@ class XServerAutoLogin:
     async def handle_login_result(self):
         try:
             print("🔍 正在检查登录结果...")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
+
+            # 处理 loginauth 中间跳转页，等待其自动跳转完成（最多20秒）
+            for i in range(20):
+                current_url = self.page.url
+                if "loginauth" in current_url:
+                    print(f"🔄 检测到中间验证页，等待自动跳转... ({i + 1}s) URL: {current_url}")
+                    await asyncio.sleep(1)
+                else:
+                    break
 
             current_url = self.page.url
             print(f"🔍 当前URL: {current_url}")
