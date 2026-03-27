@@ -327,10 +327,12 @@ class XServerAutoLogin:
 
             if login_button_selector:
                 print("🖱️ 点击登录按钮...")
-                await self.page.click(login_button_selector)
+                async with self.page.expect_navigation(timeout=60000, wait_until="load"):
+                    await self.page.click(login_button_selector)
             else:
                 print("⌨️ 使用回车键提交...")
-                await self.page.press(password_selector, "Enter")
+                async with self.page.expect_navigation(timeout=60000, wait_until="load"):
+                    await self.page.press(password_selector, "Enter")
 
             print("✅ 登录表单已提交")
             await asyncio.sleep(5)
