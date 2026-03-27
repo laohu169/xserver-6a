@@ -327,20 +327,30 @@ class XServerAutoLogin:
 
             if login_button_selector:
                 print("🖱️ 点击登录按钮...")
-                async with self.page.expect_navigation(timeout=60000, wait_until="load"):
-                    await self.page.click(login_button_selector)
+                await self.page.click(login_button_selector)
             else:
                 print("⌨️ 使用回车键提交...")
-                async with self.page.expect_navigation(timeout=60000, wait_until="load"):
-                    await self.page.press(password_selector, "Enter")
+                await self.page.press(password_selector, "Enter")
 
-            print("✅ 登录表单已提交")
-            await asyncio.sleep(5)
+            # 等待 URL 跳离登录页，兼容 AJAX / 302 各种跳转方式
+            print("⏳ 等待登录跳转...")
+            try:
+                await self.page.wait_for_url(
+                    lambda url: "login" not in url,
+                    timeout=60000
+                )
+                print(f"✅ 页面已跳转: {self.page.url}")
+            except Exception:
+                # 降级：直接等待后交由 handle_login_result 判断
+                print("⚠️ wait_for_url 超时，等待10秒后继续由结果判断模块处理...")
+                await asyncio.sleep(10)
+
             return True
         except Exception as e:
             print(f"❌ 登录操作失败: {e}")
             return False
-                # =================================================================
+
+    # =================================================================
     #                       4. 登录结果处理模块
     # =================================================================
 
