@@ -325,24 +325,24 @@ class XServerAutoLogin:
             print("✅ 密码已填写")
             await asyncio.sleep(2)
 
+            print("🖱️ 点击登录按钮（dispatch，不等待导航）...")
+            # 用 dispatchEvent 触发点击，完全绕过 Playwright 的导航等待机制
             if login_button_selector:
-                print("🖱️ 点击登录按钮...")
-                await self.page.click(login_button_selector)
+                await self.page.dispatch_event(login_button_selector, "click")
             else:
-                print("⌨️ 使用回车键提交...")
-                await self.page.press(password_selector, "Enter")
+                await self.page.dispatch_event(password_selector, "click")
 
-            # 等待跳离登录页和 loginauth 中间验证页，兼容各种跳转方式
-            print("⏳ 等待登录跳转...")
-            try:
-                await self.page.wait_for_url(
-                    lambda url: "login" not in url and "loginauth" not in url,
-                    timeout=60000
-                )
-                print(f"✅ 页面已跳转: {self.page.url}")
-            except Exception:
-                print("⚠️ wait_for_url 超时，继续向下执行...")
-                await asyncio.sleep(5)
+            # 手动轮询 URL，等待跳离登录页和 loginauth 中间验证页
+            print("⏳ 轮询等待登录跳转（最多60秒）...")
+            for i in range(60):
+                await asyncio.sleep(1)
+                current_url = self.page.url
+                print(f"   ({i + 1}s) URL: {current_url}")
+                if "login" not in current_url and "loginauth" not in current_url:
+                    print(f"✅ 登录跳转完成: {current_url}")
+                    break
+            else:
+                print("⚠️ 60秒内未检测到跳转，继续向下执行...")
 
             return True
         except Exception as e:
@@ -382,7 +382,7 @@ class XServerAutoLogin:
                     await self.page.wait_for_selector(game_button_selector, timeout=self.wait_timeout)
                     print("✅ 找到ゲーム管理按钮")
 
-                    await self.page.click(game_button_selector)
+                    await self.page.dispatch_event(game_button_selector, "click")
                     print("✅ 已点击ゲーム管理按钮")
                     await asyncio.sleep(3)
 
@@ -507,7 +507,7 @@ class XServerAutoLogin:
             for selector in button_selectors:
                 try:
                     await self.page.wait_for_selector(selector, timeout=3000)
-                    await self.page.click(selector)
+                    await self.page.dispatch_event(selector, "click")
                     print(f"✅ 点击续期按钮成功: {selector}")
                     clicked = True
                     break
