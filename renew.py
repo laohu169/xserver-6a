@@ -230,8 +230,10 @@ class XServerAutoLogin:
                 filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
                 await self.page.screenshot(path=filename, full_page=True)
                 print(f"📸 截图已保存: {filename}")
+                return filename
         except Exception as e:
             print(f"⚠️ 截图失败: {e}")
+        return None
 
     def validate_config(self):
         if not self.email or not self.password:
@@ -326,23 +328,21 @@ class XServerAutoLogin:
             await asyncio.sleep(2)
 
             print("🖱️ 点击登录按钮（dispatch，不等待导航）...")
-            # 用 dispatchEvent 触发点击，完全绕过 Playwright 的导航等待机制
             if login_button_selector:
                 await self.page.dispatch_event(login_button_selector, "click")
             else:
                 await self.page.dispatch_event(password_selector, "click")
 
-            # 手动轮询 URL，等待跳离登录页和 loginauth 中间验证页
-            print("⏳ 轮询等待登录跳转（最多60秒）...")
-            for i in range(60):
+            # 等待跳离登录页（loginauth 中间页不算终点，继续等）
+            print("⏳ 等待离开登录页（最多30秒）...")
+            for i in range(30):
                 await asyncio.sleep(1)
                 current_url = self.page.url
-                print(f"   ({i + 1}s) URL: {current_url}")
-                if "login" not in current_url and "loginauth" not in current_url:
-                    print(f"✅ 登录跳转完成: {current_url}")
+                if "login/xmgame" not in current_url:
+                    print(f"✅ 已离开登录页 ({i + 1}s): {current_url}")
                     break
             else:
-                print("⚠️ 60秒内未检测到跳转，继续向下执行...")
+                print("⚠️ 30秒内未离开登录页，继续向下执行...")
 
             return True
         except Exception as e:
@@ -350,7 +350,74 @@ class XServerAutoLogin:
             return False
 
     # =================================================================
-    #                       4. 登录结果处理模块
+    #              4. loginauth 中间验证页处理模块
+    # =================================================================
+
+    async def handle_loginauth_page(self):
+        """
+        处理 loginauth 中间验证页。
+        该页面需要用户点击确认按钮才能继续，不会自动跳转。
+        截图后尝试点击页面上所有可能的确认/提交按钮。
+        """
+        print("🔐 进入 loginauth 中间验证页处理...")
+        screenshot_file = await self.take_screenshot("loginauth_page")
+
+        # 发送截图到 Telegram，便于查看页面内容
+        if screenshot_file and self.telegram.enabled:
+            self.telegram.send_photo(screenshot_file, caption="⚠️ loginauth 中间验证页，正在尝试自动点击确认按钮")
+
+        # 打印页面文本，便于日志分析
+        try:
+            page_text = await self.page.inner_text("body")
+            print(f"📄 页面文本内容（前500字）:\n{page_text[:500]}")
+        except Exception:
+            pass
+
+        # 按优先级尝试点击各种确认/提交按钮
+        confirm_selectors = [
+            "input[type='submit']",
+            "button[type='submit']",
+            "input[value*='ログイン']",
+            "input[value*='確認']",
+            "input[value*='続']",
+            "input[value*='OK']",
+            "button:has-text('ログイン')",
+            "button:has-text('確認')",
+            "button:has-text('続')",
+            "button:has-text('OK')",
+            "a:has-text('ログイン')",
+            "a:has-text('確認')",
+            "a.btn",
+            "button.btn",
+            "input.btn",
+        ]
+
+        for selector in confirm_selectors:
+            try:
+                element = await self.page.wait_for_selector(selector, timeout=2000)
+                if element:
+                    text = await element.text_content() or await element.get_attribute("value") or ""
+                    print(f"✅ 找到确认按钮 [{selector}] 文本: {text.strip()}")
+                    await self.page.dispatch_event(selector, "click")
+                    print(f"🖱️ 已点击: {selector}")
+                    await asyncio.sleep(3)
+
+                    # 检查是否跳转离开了 loginauth
+                    new_url = self.page.url
+                    if "loginauth" not in new_url:
+                        print(f"✅ 点击后成功离开 loginauth 页: {new_url}")
+                        return True
+                    else:
+                        print(f"   点击后仍在 loginauth 页，尝试下一个按钮...")
+            except Exception:
+                continue
+
+        print("❌ 未能通过点击按钮离开 loginauth 页")
+        await self.take_screenshot("loginauth_stuck")
+        return False
+
+    # =================================================================
+    #                       5. 登录结果处理模块
     # =================================================================
 
     async def handle_login_result(self):
@@ -358,17 +425,20 @@ class XServerAutoLogin:
             print("🔍 正在检查登录结果...")
             await asyncio.sleep(2)
 
-            # 处理 loginauth 中间跳转页，等待其自动跳转完成（最多20秒）
-            for i in range(20):
-                current_url = self.page.url
-                if "loginauth" in current_url:
-                    print(f"🔄 检测到中间验证页，等待自动跳转... ({i + 1}s) URL: {current_url}")
-                    await asyncio.sleep(1)
-                else:
-                    break
-
             current_url = self.page.url
             print(f"🔍 当前URL: {current_url}")
+
+            # 如果停在 loginauth 页，主动处理它
+            if "loginauth" in current_url:
+                print("🔐 检测到 loginauth 中间验证页，尝试处理...")
+                success = await self.handle_loginauth_page()
+                if not success:
+                    print("❌ loginauth 页处理失败")
+                    return False
+                # 等待最终跳转稳定
+                await asyncio.sleep(3)
+                current_url = self.page.url
+                print(f"🔍 处理后URL: {current_url}")
 
             success_url = "https://secure.xserver.ne.jp/xapanel/xmgame/index"
 
@@ -431,7 +501,7 @@ class XServerAutoLogin:
             return False
 
     # =================================================================
-    #                    5A. 服务器信息获取模块
+    #                    6A. 服务器信息获取模块
     # =================================================================
 
     async def get_server_time_info(self):
@@ -481,7 +551,7 @@ class XServerAutoLogin:
             self.old_expiry_time = "未知"
 
     # =================================================================
-    #                    5B. 续期按钮点击模块
+    #                    6B. 续期按钮点击模块
     # =================================================================
 
     async def click_upgrade_button(self):
@@ -543,7 +613,7 @@ class XServerAutoLogin:
             self.renewal_status = "Failed"
 
     # =================================================================
-    #                       6. 主流程模块
+    #                       7. 主流程模块
     # =================================================================
 
     async def run(self):
